@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Have I Been Pwned Checker</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔐 Have I Been Pwned?</h1>
+            <p>Check if your email address has been compromised in a data breach</p>
+        </header>
+
+        <main>
+            <div class="search-section">
+                <div class="input-group">
+                    <input type="email" id="emailInput" placeholder="Enter your email address" required>
+                    <button id="checkButton" onclick="checkBreaches()">Check Breaches</button>
+                </div>
+                
+                <div class="api-key-section">
+                    <details>
+                        <summary>API Configuration (Optional)</summary>
+                        <input type="password" id="apiKeyInput" placeholder="Enter your HIBP API key for enhanced features">
+                        <small>Free tier: 1 request per 1.5 seconds. <a href="https://haveibeenpwned.com/API/Key" target="_blank">Get API key</a> for faster access.</small>
+                    </details>
+                </div>
+            </div>
+
+            <div id="loadingSpinner" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Checking breaches...</p>
+            </div>
+
+            <div id="results" class="results hidden">
+                <h2>Results</h2>
+                <div id="resultsContent"></div>
+            </div>
+
+            <div id="error" class="error hidden">
+                <h3>⚠️ Error</h3>
+                <p id="errorMessage"></p>
+            </div>
+        </main>
+
+        <footer>
+            <p>Data powered by <a href="https://haveibeenpwned.com" target="_blank">Have I Been Pwned</a></p>
+            <p>This tool helps you check if your email has been involved in known data breaches</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
