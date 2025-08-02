@@ -1,7 +1,7 @@
 #!/bin/bash
 
-echo "🔐 Have I Been Pwned Checker - Quick Start"
-echo "=========================================="
+echo "🔐 Have I Been Pwned Checker (@CYBERWELLZ) - Quick Start"
+echo "========================================================"
 echo ""
 
 # Check if Node.js is installed
