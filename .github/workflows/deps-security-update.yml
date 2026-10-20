@@ -1,56 +1,100 @@
 # Dependency security update, run on GitHub's machines only (never on a local machine).
-# Applies every security fix that stays inside the versions package.json already allows
-# (npm audit fix / pnpm audit --fix, never --force), builds the project, and pushes the
+# Applies every security fix that stays inside the versions the project already allows
+# (npm audit fix / pnpm audit --fix, never --force; composer update of the advised packages within
+# their constraints; go get of the advised Go modules), builds or tests the project, and pushes the
 # result to a branch for review. Nothing reaches the default branch without a pull request.
+# pnpm keeps its overrides in pnpm-workspace.yaml, so that file is committed with the lock.
 name: dependency security update
 on:
   workflow_dispatch:
+    inputs:
+      directory:
+        description: Folder holding the dependency files (relative to the repository root)
+        default: "."
+        required: false
 permissions:
   contents: write
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: ${{ inputs.directory || '.' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Apply security fixes within the allowed versions (install scripts off)
         run: |
           set -euo pipefail
           if [ -f pnpm-lock.yaml ]; then
-            corepack enable
+            corepack enable; node -e "process.exit(require('./package.json').packageManager ? 0 : 1)" || corepack prepare pnpm@9 --activate
             pnpm audit --fix || true
             pnpm install --no-frozen-lockfile --ignore-scripts
           elif [ -f package-lock.json ]; then
             npm audit fix --ignore-scripts || true
-          else
-            echo "No npm or pnpm lock file; nothing to do."; exit 0
           fi
-      - name: Build (the update is only kept if this passes)
+          if [ -f composer.lock ]; then
+            pkgs=$(docker run --rm -v "$PWD:/app" -w /app composer:2 audit --locked --format=json 2>/dev/null \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); print(' '.join(sorted(d.get('advisories',{}).keys())))" || true)
+            if [ -n "$pkgs" ]; then
+              docker run --rm -v "$PWD:/app" -w /app composer:2 update $pkgs --with-dependencies \
+                --no-install --no-scripts --no-interaction --ignore-platform-reqs
+            fi
+          fi
+          if [ -f go.mod ]; then
+            go list -m -json all >/dev/null
+            go install golang.org/x/vuln/cmd/govulncheck@latest
+            mods=$("$(go env GOPATH)/bin/govulncheck" -format json ./... 2>/dev/null \
+              | python3 -c "import json,sys
+          seen=set()
+          for chunk in sys.stdin.read().replace('}\n{','}\x00{').split('\x00'):
+              try: o=json.loads(chunk)
+              except Exception: continue
+              for a in (o.get('osv') or {}).get('affected',[]):
+                  m=(a.get('package') or {}).get('name','')
+                  if m and m!='stdlib': seen.add(m)
+          print(' '.join(sorted(seen)))" || true)
+            for m in $mods; do go get "$m@latest"; done
+            go mod tidy
+          fi
+      - name: Build or test (the update is only kept if this passes)
         run: |
           set -euo pipefail
-          if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile; PM=pnpm
-          else npm ci; PM=npm; fi
-          if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
-            $PM run build
-          else
-            for f in server.js index.js app.js; do if [ -f "$f" ]; then node --check "$f"; fi; done
+          if [ -f package.json ]; then
+            if [ -f pnpm-lock.yaml ]; then
+              corepack enable; node -e "process.exit(require('./package.json').packageManager ? 0 : 1)" || corepack prepare pnpm@9 --activate
+              pnpm install --frozen-lockfile; PM=pnpm
+            else npm ci; PM=npm; fi
+            if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
+              $PM run build
+            else
+              for f in server.js index.js app.js; do if [ -f "$f" ]; then node --check "$f"; fi; done
+            fi
           fi
+          if [ -f composer.lock ]; then
+            docker run --rm -v "$PWD:/app" -w /app composer:2 validate --no-check-publish --no-check-all
+            docker run --rm -v "$PWD:/app" -w /app composer:2 install --no-interaction --no-scripts --ignore-platform-reqs --dry-run >/dev/null
+          fi
+          if [ -f go.mod ]; then go build ./... && go vet ./... && go test ./...; fi
       - name: Remaining advisories (report only)
         run: |
           if [ -f pnpm-lock.yaml ]; then pnpm audit --audit-level high || true
-          else npm audit --audit-level=high || true; fi
+          elif [ -f package-lock.json ]; then npm audit --audit-level=high || true; fi
+          if [ -f composer.lock ]; then docker run --rm -v "$PWD:/app" -w /app composer:2 audit --locked || true; fi
+          if [ -f go.mod ]; then "$(go env GOPATH)/bin/govulncheck" ./... || true; fi
       - name: Push the update to a branch for review
         run: |
           set -euo pipefail
-          if git diff --quiet -- package.json package-lock.json pnpm-lock.yaml; then
+          files="package.json package-lock.json pnpm-lock.yaml pnpm-workspace.yaml composer.json composer.lock go.mod go.sum"
+          if git diff --quiet -- $files && [ -z "$(git ls-files --others --exclude-standard -- $files)" ]; then
             echo "No dependency changes."; exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           branch="security/dependency-update-${GITHUB_RUN_ID}"
           git checkout -b "$branch"
-          for f in package.json package-lock.json pnpm-lock.yaml; do if [ -f "$f" ]; then git add "$f"; fi; done
+          for f in $files; do if [ -f "$f" ]; then git add "$f"; fi; done
           git commit -m "fix(deps): security updates within the allowed versions" \
-            -m "Applied on GitHub by the dependency security update workflow (audit fix, no --force); the build passed before this was pushed."
+            -m "Applied on GitHub by the dependency security update workflow; the build/tests passed before this was pushed."
           git push origin "$branch"
           echo "Pushed $branch"
