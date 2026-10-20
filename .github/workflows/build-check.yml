@@ -12,13 +12,25 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install and build
+      - name: Install and build (only the languages this repository has)
         run: |
           set -euo pipefail
-          if [ -f pnpm-lock.yaml ]; then corepack enable; node -e "process.exit(require('./package.json').packageManager ? 0 : 1)" || corepack prepare pnpm@9 --activate; pnpm install --frozen-lockfile; PM=pnpm
-          else npm ci; PM=npm; fi
-          if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
-            $PM run build
-          else
-            for f in server.js index.js app.js; do if [ -f "$f" ]; then node --check "$f"; fi; done
+          ran=0
+          if [ -f package.json ] && { [ -f package-lock.json ] || [ -f pnpm-lock.yaml ]; }; then
+            ran=1
+            if [ -f pnpm-lock.yaml ]; then
+              corepack enable; node -e "process.exit(require('./package.json').packageManager ? 0 : 1)" || corepack prepare pnpm@9 --activate
+              pnpm install --frozen-lockfile; PM=pnpm
+            else npm ci; PM=npm; fi
+            if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
+              $PM run build
+            else
+              for f in server.js index.js app.js; do if [ -f "$f" ]; then node --check "$f"; fi; done
+            fi
           fi
+          if [ -f go.mod ]; then ran=1; go build ./... && go vet ./... && go test ./...; fi
+          if [ -f composer.lock ]; then
+            ran=1
+            docker run --rm -v "$PWD:/app" -w /app composer:2 validate --no-check-publish --no-check-all
+          fi
+          [ "$ran" = 1 ] || echo "No package.json, go.mod or composer.lock at the root: nothing to build here (the repository's own CI covers it)."
