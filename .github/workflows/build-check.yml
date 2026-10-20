@@ -3,6 +3,7 @@
 name: build check
 on:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -14,7 +15,7 @@ jobs:
       - name: Install and build
         run: |
           set -euo pipefail
-          if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile; PM=pnpm
+          if [ -f pnpm-lock.yaml ]; then corepack enable; node -e "process.exit(require('./package.json').packageManager ? 0 : 1)" || corepack prepare pnpm@9 --activate; pnpm install --frozen-lockfile; PM=pnpm
           else npm ci; PM=npm; fi
           if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
             $PM run build
