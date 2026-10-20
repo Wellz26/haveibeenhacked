@@ -1,0 +1,23 @@
+# Builds every pull request on GitHub's machines, so a dependency update that breaks the build
+# is never merged. Runs on GitHub only.
+name: build check
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install and build
+        run: |
+          set -euo pipefail
+          if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile; PM=pnpm
+          else npm ci; PM=npm; fi
+          if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
+            $PM run build
+          else
+            for f in server.js index.js app.js; do [ -f "$f" ] && node --check "$f"; done
+          fi
