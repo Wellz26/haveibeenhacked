@@ -1,0 +1,57 @@
+# Dependency security update, run on GitHub's machines only (never on a local machine).
+# Applies every security fix that stays inside the versions package.json already allows
+# (npm audit fix / pnpm audit --fix, never --force), builds the project, and pushes the
+# result to a branch for review. Nothing reaches the default branch without a pull request.
+name: dependency security update
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Apply security fixes within the allowed versions (install scripts off)
+        run: |
+          set -euo pipefail
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            pnpm audit --fix || true
+            pnpm install --no-frozen-lockfile --ignore-scripts
+          elif [ -f package-lock.json ]; then
+            npm audit fix --ignore-scripts || true
+          else
+            echo "No npm or pnpm lock file; nothing to do."; exit 0
+          fi
+      - name: Build (the update is only kept if this passes)
+        run: |
+          set -euo pipefail
+          if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile; PM=pnpm
+          else npm ci; PM=npm; fi
+          if node -e "process.exit(require('./package.json').scripts?.build ? 0 : 1)"; then
+            $PM run build
+          else
+            for f in server.js index.js app.js; do [ -f "$f" ] && node --check "$f"; done
+          fi
+      - name: Remaining advisories (report only)
+        run: |
+          if [ -f pnpm-lock.yaml ]; then pnpm audit --audit-level high || true
+          else npm audit --audit-level=high || true; fi
+      - name: Push the update to a branch for review
+        run: |
+          set -euo pipefail
+          git checkout -- . ':(exclude)package.json' ':(exclude)package-lock.json' ':(exclude)pnpm-lock.yaml' 2>/dev/null || true
+          if git diff --quiet -- package.json package-lock.json pnpm-lock.yaml; then
+            echo "No dependency changes."; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="security/dependency-update-${GITHUB_RUN_ID}"
+          git checkout -b "$branch"
+          git add package.json package-lock.json pnpm-lock.yaml 2>/dev/null || true
+          git commit -m "fix(deps): security updates within the allowed versions" \
+            -m "Applied on GitHub by the dependency security update workflow (audit fix, no --force); the build passed before this was pushed."
+          git push origin "$branch"
+          echo "Pushed $branch"
